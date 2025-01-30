@@ -1,7 +1,6 @@
 package client
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -46,8 +45,8 @@ func InitializeClient(config Configuration) *resty.Client {
 	// Configure Retry Mechanism
 	client.
 		SetRetryCount(config.MaxRetries).
-		SetRetryWaitTime(time.Duration(config.RetryWaitMin) * time.Millisecond).
-		SetRetryMaxWaitTime(time.Duration(config.RetryWaitMax) * time.Millisecond).
+		SetRetryWaitTime(config.RetryWaitMin).
+		SetRetryMaxWaitTime(config.RetryMaxWaitTime).
 		AddRetryCondition(
 			func(r *resty.Response, err error) bool {
 				// Retry on network errors
@@ -56,38 +55,29 @@ func InitializeClient(config Configuration) *resty.Client {
 					return true
 				}
 				// Retry on server errors (5xx) and too many requests (429)
-				if r.StatusCode() >= 500 || r.StatusCode() == 429 {
+				if r.StatusCode() == 429 || r.StatusCode() >= 500 && r.StatusCode() <= 599  {
 					log.Printf("Retry condition met due to status code: %d", r.StatusCode())
 					return true
 				}
 				return false
 			},
 		).
-		SetRetryAfter(
-			func(c *resty.Client, r *resty.Response) (time.Duration, error) {
-				countIface, ok := r.Request.Context().Value("retry_count").(int)
-				var count int
-				if !ok {
-					count = 1
-				} else {
-					count = countIface + 1
-				}
+		SetRetryAfter(func(c *resty.Client, r *resty.Response) (time.Duration, error) {
+			attempt := r.Request.Attempt
 
-				ctx := context.WithValue(r.Request.Context(), "retry_count", count)
-				r.Request.SetContext(ctx)
+			// Exponential backoff: wait = RetryWaitMin * 2^(attempt-1)
+			backoff := float64(config.RetryWaitMin) * math.Pow(2, float64(attempt-1))
+			duration := time.Duration(backoff)
 
-				// Calculate exponential backoff with jitter
-				min := float64(config.RetryWaitMin)
-				max := float64(config.RetryWaitMax)
-				backoff := min * math.Pow(2, float64(count))
-				if backoff > max {
-					backoff = max
-				}
-				// Add jitter: random value between 0 and 100ms
-				jitter := localRand.Float64() * 100
-				return time.Duration(backoff+jitter) * time.Millisecond, nil
-			},
-		)
+			if duration > config.RetryWaitMax {
+				duration = config.RetryWaitMax
+			}
+
+			jitter := time.Duration(localRand.Int63n(100_000_000)) // 0–100 ms in nanoseconds
+			duration += jitter
+
+			return duration, nil
+		})
 
 	// Minimal Logging: Log requests and responses
 	client.OnBeforeRequest(func(c *resty.Client, r *resty.Request) error {
