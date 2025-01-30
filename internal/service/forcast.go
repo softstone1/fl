@@ -22,10 +22,6 @@ type forecast struct {
 	forecastURLCache     *lru.Cache[string, string]
 	forecastPeriodsCache *lru.Cache[string, []model.ForcastPeriod]
 }
-type CachedForecast struct {
-	ForecastURL      string
-	ForecastResponse []model.ForcastPeriod
-}
 
 // make sure forcast implements the Forcast interface
 var _ Forecast = (*forecast)(nil)
